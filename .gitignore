@@ -4,3 +4,7 @@
 *.gif
 *.eeprom
 /Incipient.elf
+/tools/compileModels2
+*.mp4
+*.blend1
+/core

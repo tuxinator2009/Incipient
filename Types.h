@@ -4,7 +4,13 @@
 #include <Pokitto.h>
 #include "FixedPoints/FixedPoints.h"
 
+#define USE_FLOAT
+
+#ifdef USE_FLOAT
+using fixed_t = float;
+#else
 using fixed_t = SFixed<15, 16>;
+#endif
 
 const fixed_t sinTable[] =
 {
@@ -46,7 +52,22 @@ const fixed_t cosTable[] =
   0.932472, 0.941089, 0.949135, 0.956604, 0.963493, 0.969797, 0.975512, 0.980635, 0.985162, 0.989092, 0.992421, 0.995147, 0.997269, 0.998786, 0.999696, 1.000000
 };
 
-static inline constexpr fixed_t fixed_sqrt( fixed_t x ){
+#ifdef USE_FLOAT
+static inline float fastInverseSquareRoot(float value)
+{
+  const float x2 = value * 0.5F;
+  const float threehalfs = 1.5F;
+  
+  union {
+    float f;
+    uint32_t i;
+  } conv  = { .f = value };
+  conv.i  = 0x5f3759df - ( conv.i >> 1 );
+  conv.f  *= threehalfs - ( x2 * conv.f * conv.f );
+  return conv.f;
+}
+#else
+static inline constexpr SFixed<15, 16> sqrt( SFixed<15, 16> x ){
   uint32_t t = 0, q = 0, b = 0x40000000, r = x.getInternal();
   while( b > 0x4000 ){
     t = q;
@@ -60,68 +81,118 @@ static inline constexpr fixed_t fixed_sqrt( fixed_t x ){
     b >>= 1;
   }
   q >>= 8;
-  x = fixed_t::fromInternal(q);
+  x = SFixed<15, 16>::fromInternal(q);
   return x;
 }
+#endif
+
+struct Point
+{
+  int16_t x;
+  int16_t y;
+};
 
 struct VectorF
 {
   fixed_t x;
   fixed_t y;
-  constexpr VectorF(const int16_t &ix, const int16_t &iy)
-  {
-    x = ix;
-    y = iy;
-  }
-  constexpr VectorF(const fixed_t &fx, const fixed_t &fy)
-  {
-    x = fx;
-    y = fy;
-  }
-  void rotate(const VectorF &origin, uint8_t amount)
+  constexpr VectorF() : x(0.0), y(0.0) {}
+  constexpr VectorF(const fixed_t &fx, const fixed_t &fy) : x(fx), y(fy) {}
+  constexpr VectorF(const Point &point) : x(point.x), y(point.y) {}
+  VectorF &rotate(const VectorF &origin, uint8_t amount)
   {
     fixed_t ox = x - origin.x;
-    fixed_t oy = y - origin.y;
     fixed_t s = sinTable[amount];
     fixed_t c = cosTable[amount];
     x = ox * c - y * s + origin.x;
     y = ox * s + y * c + origin.y;
+    return *this;
   }
-  void length()
+  fixed_t length() const
   {
-    return fixed_sqrt(x * x + y * y);
+    return sqrt(x * x + y * y);
   }
-  void normalize()
+  VectorF normalize()
   {
-    fixed_t len = length();
-    x /= len;
-    y /= len;
+#ifdef USE_FLOAT
+    fixed_t invsqrt = fastInverseSquareRoot(x * x + y * y);
+#else
+    fixed_t invsqrt = fixed_t(1.0) / length();
+#endif
+    x *= invsqrt;
+    y *= invsqrt;
+    return *this;
   }
-  void lerp(const VectorF &other, const fixed_t &amount)
+  VectorF normalized() const
+  {
+    VectorF vector = *this;
+    vector.normalize();
+    return vector;
+  }
+  VectorF lerp(const VectorF &other, const fixed_t &amount)
   {
     x += amount * (other.x - x);
     y += amount * (other.y - y);
+    return *this;
   }
-  void slerp(const VectorF &other, const fixed_t &amount, const fixed_t &scale)
+  VectorF slerp(const VectorF &other, const fixed_t &amount, const fixed_t &scale)
   {
-    fixed_t len = other.length() * scale;
     lerp(other, amount);
     normalize();
+#ifdef USE_FLOAT
+    fixed_t invsqrt = scale / fastInverseSquareRoot(other.x * other.x + other.y * other.y);
+    x *= invsqrt;
+    y *= invsqrt;
+#else
+    fixed_t len = other.length() * scale;
     x *= len;
     y *= len;
+#endif
+    return *this;
   }
-  fixed_t cross(const VectorF &other)
+  fixed_t cross(const VectorF &other) const
   {
     return x * other.y - y * other.x;
   }
-  fixed_t dot(const VectorF &other)
+  fixed_t cross(const Point &point) const
+  {
+    return x * point.y - y * point.x;
+  }
+  fixed_t dot(const VectorF &other) const
   {
     return x * other.x + y * other.y;
+  }
+  fixed_t dot(const Point &point) const
+  {
+    return x * point.x + y * point.y;
+  }
+  VectorF projected(const VectorF &xAxis, const VectorF &yAxis) const
+  {
+    return VectorF(x * xAxis.x + y * yAxis.x, x * xAxis.y + y * yAxis.y);
+  }
+  VectorF clipped(const VectorF &min, const VectorF &max) const
+  {
+    VectorF v(x, y);
+    if (v.x < min.x)
+      v.x = min.x;
+    else if (v.x > max.x)
+      v.x = max.x;
+    if (v.y < min.y)
+      v.y = min.y;
+    else if (v.y > max.y)
+      v.y = max.y;
+    return v;
   }
   VectorF &operator=(const VectorF &other)
   {
     x = other.x;
     y = other.y;
+    return *this;
+  }
+  VectorF &operator=(const Point &point)
+  {
+    x = point.x;
+    y = point.y;
     return *this;
   }
   VectorF &operator+=(const VectorF &other)
@@ -130,16 +201,34 @@ struct VectorF
     y += other.y;
     return *this;
   }
+  VectorF &operator+=(const Point &point)
+  {
+    x += point.x;
+    y += point.y;
+    return *this;
+  }
   VectorF &operator-=(const VectorF &other)
   {
     x -= other.x;
     y -= other.y;
     return *this;
   }
+  VectorF &operator-=(const Point &point)
+  {
+    x -= point.x;
+    y -= point.y;
+    return *this;
+  }
   VectorF &operator*=(const VectorF &other)
   {
     x *= other.x;
     y *= other.y;
+    return *this;
+  }
+  VectorF &operator*=(const Point &point)
+  {
+    x *= point.x;
+    y *= point.y;
     return *this;
   }
   VectorF &operator*=(const fixed_t &scale)
@@ -160,6 +249,12 @@ struct VectorF
     y /= other.y;
     return *this;
   }
+  VectorF &operator/=(const Point &point)
+  {
+    x /= point.x;
+    y /= point.y;
+    return *this;
+  }
   VectorF &operator/=(const fixed_t &scale)
   {
     x /= scale;
@@ -178,16 +273,34 @@ struct VectorF
     v += other;
     return v;
   }
+  VectorF operator+(const Point &point) const
+  {
+    VectorF v(x, y);
+    v += point;
+    return v;
+  }
   VectorF operator-(const VectorF &other) const
   {
     VectorF v(x, y);
     v -= other;
     return v;
   }
+  VectorF operator-(const Point &point) const
+  {
+    VectorF v(x, y);
+    v -= point;
+    return v;
+  }
   VectorF operator*(const VectorF &other) const
   {
     VectorF v(x, y);
     v *= other;
+    return v;
+  }
+  VectorF operator*(const Point &point) const
+  {
+    VectorF v(x, y);
+    v *= point;
     return v;
   }
   VectorF operator*(const fixed_t &scale) const
@@ -208,6 +321,12 @@ struct VectorF
     v /= other;
     return v;
   }
+  VectorF operator/(const Point &point) const
+  {
+    VectorF v(x, y);
+    v /= point;
+    return v;
+  }
   VectorF operator/(const fixed_t &scale) const
   {
     VectorF v(x, y);
@@ -223,8 +342,9 @@ struct VectorF
   constexpr VectorF operator-() const
   {
     VectorF v(-x, -y);
+    return v;
   }
-  bool operator==(const VectorF &other)
+  bool operator==(const VectorF &other) const
   {
     if (x != other.x)
       return false;
@@ -232,7 +352,15 @@ struct VectorF
       return false;
     return true;
   }
-  bool operator!=(const VectorF &other)
+  bool operator==(const Point &point) const
+  {
+    if ((int16_t)x != point.x)
+      return false;
+    if ((int16_t)y != point.y)
+      return false;
+    return true;
+  }
+  bool operator!=(const VectorF &other) const
   {
     if (x != other.x)
       return true;
@@ -240,12 +368,13 @@ struct VectorF
       return true;
     return false;
   }
-};
-
-struct Point
-{
-  int16_t x;
-  int16_t y;
+  operator Point() const
+  {
+    Point point;
+    point.x = (int16_t)x;
+    point.y = (int16_t)y;
+    return point;
+  }
 };
 
 struct Circle
@@ -256,24 +385,27 @@ struct Circle
 
 struct Line
 {
-  Point vertices[2];
+  Point p1;
+  Point p2;
 };
 
 struct Triangle
 {
-  Point vertices[3];
+  Point p1;
+  Point p2;
+  Point p3;
 };
 
 struct Shape
 {
+  uint8_t type;
   union
   {
-    Point *point;
-    Circle *circle;
-    Line *line;
-    Triangle *triangle;
+    Point point;
+    Circle circle;
+    Line line;
+    Triangle triangle;
   };
-  uint8_t type;
   static constexpr uint8_t Point = 0;
   static constexpr uint8_t Line = 1;
   static constexpr uint8_t Circle = 2;
@@ -284,8 +416,8 @@ struct Particle
 {
   VectorF offset;
   VectorF vector;
-  int16_t velocity;
-  int16_t distance;
+  fixed_t velocity;
+  fixed_t distance;
   uint16_t color;
   uint8_t life;
 };
@@ -294,7 +426,7 @@ struct Model
 {
   uint8_t numShapes;
   Point link;
-  Point weakspot;
+  Circle weakspot;
   const Shape *shapes;
 };
 
@@ -307,22 +439,58 @@ struct Transform
 
 struct BodyPart
 {
+  static constexpr uint8_t State_Normal = 0;
+  static constexpr uint8_t State_Digesting = 64;
+  static constexpr uint8_t State_Breaking = 128;
+  static constexpr uint8_t State_Growing = 192;
+  static constexpr uint8_t State_Counter = 63;
+  static constexpr uint8_t State_Flag = 192;
   Transform transform;
   const Model *model;
   BodyPart *previous;
   BodyPart *next;
+  Circle weakspot;
   fixed_t scale;
-  uint16_t color;
-  uint8_t alpha;
+  uint16_t colors[4];
+  uint8_t alphas[4];
+  uint8_t state;
 };
 
 struct Creature
 {
+  static constexpr uint8_t State_Stationary = 0;
+  static constexpr uint8_t State_Wandering = 1;
+  static constexpr uint8_t State_Fleeing = 2;
+  static constexpr uint8_t State_Chasing = 3;
   const Model *mouthClosed;
   BodyPart *head;
   BodyPart *tail;
-  Circle offscreen;
+  fixed_t speed;
+  fixed_t slerpAmount;
+  uint8_t target;
+  int8_t tDir;
   uint8_t t;
+  uint8_t state;
+};
+
+struct Food
+{
+  const Model *model;
+  uint16_t colors[4];
+};
+
+struct Score
+{
+  char name[4];
+  uint32_t score;
+};
+
+struct Stage
+{
+  uint32_t nextStage;
+  uint8_t maxEnemies;
+  uint8_t minSize;
+  uint8_t maxSize;
 };
 
 #endif //TYPES_H

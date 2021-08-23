@@ -1,0 +1,5 @@
+Title: Incipient
+Author: tuxinator2009
+Version: v1.0
+Description: Guide your creature to destroy and consume other creatures assimilating pieces of their body. Be careful as other creatures will try to devour you as well!
+

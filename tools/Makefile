@@ -1,5 +1,5 @@
 CXX=g++
-CXX_FLAGS=-Wall -g
+CXX_FLAGS=-Wall -Wno-class-memaccess -g
 LIBS=-lm
 SRC_FILES := $(wildcard *.cpp)
 BIN_FILES := $(patsubst %.cpp,%,$(SRC_FILES))

@@ -127,6 +127,15 @@ void Game::update()
   uint32_t endTime;
 #endif
   PB::pollButtons();
+  if (joystickEnabled)
+  {
+    //Button1 mimics pressing the C button
+    if (joyhat.Button1())
+      PB::buttons_state |= BTN_MASK_C;
+    //Button2 mimics pressing the A button
+    if (joyhat.Button2())
+      PB::buttons_state |= BTN_MASK_A;
+  }
   buttonsJustPressed = ~buttonsPreviousState & PB::buttons_state;
   buttonsPreviousState = PB::buttons_state;
   switch (currentState)
@@ -262,8 +271,9 @@ void Game::doPlayerMovement()
   #ifndef POK_SIM
   if (joystickEnabled)
   {
-    joy.x = joyhat.JoyX() - 50;
-    joy.y = 50 - joyhat.JoyY();
+    //Joyhat is weirdly oriented lol
+    joy.x = 50 - joyhat.JoyY();
+    joy.y = 50 - joyhat.JoyX();
   }
   #endif
   if (Data::player.state == Creature::State_Wandering)
